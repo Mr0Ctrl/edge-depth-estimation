@@ -115,6 +115,12 @@ If you want to build a mobile app (e.g. Android APK) without using Flutter, here
 
 ## 5. Quickstart & Verification
 
+### One-Click Launch (No manual venv activation needed)
+```bash
+./run.sh
+```
+
+### Manual Usage
 ```bash
 # 1. Activate environment
 source .venv/bin/activate
