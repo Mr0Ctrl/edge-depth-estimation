@@ -119,9 +119,7 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
             if f.lower().endswith((".png", ".jpg", ".jpeg")):
                 samples.append([os.path.join(sample_images_dir, f)])
 
-    theme = gr.themes.Soft(primary_hue="blue", neutral_hue="slate")
-
-    with gr.Blocks(theme=theme, title="EdgeDepth-Lite | Synthetic Aperture Simulator") as demo:
+    with gr.Blocks(title="EdgeDepth-Lite | Synthetic Aperture Simulator") as demo:
         gr.Markdown(
             """
             # 📷 EdgeDepth-Lite: Synthetic Aperture & Bokeh Prototype
@@ -233,7 +231,8 @@ def main():
 
     app = BokehApp(model_name=args.model)
     demo = create_demo(app)
-    demo.launch(server_name=args.host, server_port=args.port, share=args.share)
+    theme = gr.themes.Soft(primary_hue="blue", neutral_hue="slate")
+    demo.launch(server_name=args.host, server_port=args.port, share=args.share, theme=theme)
 
 
 if __name__ == "__main__":
