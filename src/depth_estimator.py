@@ -90,8 +90,8 @@ class DepthEstimator:
         depth_np = prediction.cpu().numpy()
 
         # 1. Robust clipping against zero/sky disparity singularities and extreme outliers
-        p_low = float(np.percentile(depth_np, 0.5))
-        p_high = float(np.percentile(depth_np, 99.5))
+        p_low = float(np.percentile(depth_np, 0.01))
+        p_high = float(np.percentile(depth_np, 99.99))
         if p_high > p_low:
             raw_disp = np.clip((depth_np - p_low) / (p_high - p_low), 0.0, 1.0)
         else:
@@ -108,15 +108,15 @@ class DepthEstimator:
             # When disparity m -> 0 (sky / horizon), 1/m -> infinity.
             # This causes a singularity where the sky blows up to infinity and crushes foreground contrast.
             # We clamp to optical infinity floor so the sky remains stable and properly dark.
-            sky_floor = 0.04
+            sky_floor = 0.05
             m_clamped = np.maximum(raw_disp, sky_floor)
 
             # Linear metric distance: z = 1 / m
             z = 1.0 / m_clamped
 
             # Robust min-max normalization of z (0.5% to 99.5% percentiles)
-            z_min = float(np.percentile(z, 0.5))
-            z_max = float(np.percentile(z, 99.5))
+            z_min = float(np.percentile(z, 0.01))
+            z_max = float(np.percentile(z, 99.99))
             if z_max > z_min:
                 z_norm = np.clip((z - z_min) / (z_max - z_min), 0.0, 1.0)
             else:
