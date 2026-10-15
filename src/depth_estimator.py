@@ -89,37 +89,45 @@ class DepthEstimator:
 
         depth_np = prediction.cpu().numpy()
 
-        # Normalize raw disparity to [0, 1]
-        depth_min = depth_np.min()
-        depth_max = depth_np.max()
-        if depth_max > depth_min:
-            depth_norm = (depth_np - depth_min) / (depth_max - depth_min)
+        # 1. Robust clipping against zero/sky disparity singularities and extreme outliers
+        p_low = float(np.percentile(depth_np, 0.5))
+        p_high = float(np.percentile(depth_np, 99.5))
+        if p_high > p_low:
+            raw_disp = np.clip((depth_np - p_low) / (p_high - p_low), 0.0, 1.0)
         else:
-            depth_norm = np.zeros_like(depth_np, dtype=np.float32)
+            raw_disp = np.zeros_like(depth_np, dtype=np.float32)
 
-        depth_norm = depth_norm.astype(np.float32)
+        raw_disp = raw_disp.astype(np.float32)
 
-        # True linear depth inversion: z = 1/m
-        # Disparity m = k/z has 55x sensitivity distortion between near and far.
-        # Taking z = 1/m makes depth change completely uniform (1x) across all distances.
-        if "raw" in depth_mode.lower():
-            final_depth = depth_norm
+        # 2. Linear depth inversion with sky hyperfocal floor
+        mode_lower = depth_mode.lower()
+        if "raw" in mode_lower:
+            final_depth = raw_disp
         else:
-            z_near = 1.0
-            z_far = 8.0  # Photographic focal depth ratio
-            inv_z = (1.0 / z_far) + depth_norm * (1.0 / z_near - 1.0 / z_far)
-            z = 1.0 / np.maximum(inv_z, 1e-6)
+            # Sky Asymptote Floor:
+            # When disparity m -> 0 (sky / horizon), 1/m -> infinity.
+            # This causes a singularity where the sky blows up to infinity and crushes foreground contrast.
+            # We clamp to optical infinity floor so the sky remains stable and properly dark.
+            sky_floor = 0.04
+            m_clamped = np.maximum(raw_disp, sky_floor)
 
-            # Normalize z strictly to [0.0, 1.0]
-            z_min = float(z.min())
-            z_max = float(z.max())
+            # Linear metric distance: z = 1 / m
+            z = 1.0 / m_clamped
+
+            # Robust min-max normalization of z (0.5% to 99.5% percentiles)
+            z_min = float(np.percentile(z, 0.5))
+            z_max = float(np.percentile(z, 99.5))
             if z_max > z_min:
-                z_norm = (z - z_min) / (z_max - z_min)
+                z_norm = np.clip((z - z_min) / (z_max - z_min), 0.0, 1.0)
             else:
                 z_norm = np.zeros_like(z)
 
-            # Standard convention: 1.0 = Near (foreground), 0.0 = Far (background)
-            final_depth = 1.0 - z_norm
+            if "distance" in mode_lower or "sky = bright" in mode_lower:
+                # 3D Distance Convention: Near = 0.0 (dark), Sky = 1.0 (bright)
+                final_depth = z_norm
+            else:
+                # Portrait Bokeh Convention (Default): Near = 1.0 (bright), Sky = 0.0 (pitch black)
+                final_depth = 1.0 - z_norm
 
         depth_norm = np.clip(final_depth, 0.0, 1.0).astype(np.float32)
 

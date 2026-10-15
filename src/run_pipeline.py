@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--blur-power", type=float, default=0.7, help="Bokeh blur intensity in [0.0, 1.0]")
     parser.add_argument("--dof-width", type=float, default=0.02, help="Depth of field margin")
     parser.add_argument("--curve-type", type=str, default="Aggressive (Sharp Subject Pop)", help="Blur curve type")
-    parser.add_argument("--depth-mode", type=str, default="Linear Metric Depth (z = 1/m)", help="Depth representation mode")
+    parser.add_argument("--depth-mode", type=str, default="Linear Depth (Near = Bright, Sky = Dark)", help="Depth representation mode")
     parser.add_argument("--output-dir", type=str, default="outputs", help="Output directory")
     parser.add_argument("--model", type=str, default="depth-anything/Depth-Anything-V2-Small-hf", help="Model ID")
     parser.add_argument("--highlight-focus", action="store_true", help="Highlight the focal plane in green")
