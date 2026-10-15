@@ -45,6 +45,8 @@ class DepthEstimator:
         self,
         image: Union[np.ndarray, Image.Image],
         colormap: str = "inferno",
+        depth_mode: str = "Linearized (Balanced Contrast)",
+        gamma: float = 1.0,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Estimate relative depth from an input image.
@@ -52,6 +54,11 @@ class DepthEstimator:
         Args:
             image: Input image as RGB numpy array (H, W, 3) or PIL Image.
             colormap: Matplotlib colormap name for visualization ('inferno', 'magma', 'turbo').
+            depth_mode: Depth representation:
+                - 'Raw Disparity (Foundation Model Default)': Direct 1/Z disparity output.
+                - 'Linearized (Balanced Contrast)': Perceptual linearization expanding background details.
+                - 'Inverse Metric (1/Z Physical Distance)': Physical distance linearization.
+            gamma: Optional additional power transform on depth values.
 
         Returns:
             depth_normalized: (H, W) float32 numpy array with values in [0.0, 1.0].
@@ -82,7 +89,7 @@ class DepthEstimator:
 
         depth_np = prediction.cpu().numpy()
 
-        # Normalize depth map to [0, 1]
+        # Normalize raw disparity to [0, 1]
         depth_min = depth_np.min()
         depth_max = depth_np.max()
         if depth_max > depth_min:
@@ -91,6 +98,26 @@ class DepthEstimator:
             depth_norm = np.zeros_like(depth_np, dtype=np.float32)
 
         depth_norm = depth_norm.astype(np.float32)
+
+        # Apply linearization if selected
+        mode_lower = depth_mode.lower()
+        if "balanced" in mode_lower or "gamma" in mode_lower:
+            # Perceptual square-root linearization: expands the compressed background
+            depth_norm = np.power(depth_norm, 0.5 * gamma)
+        elif "metric" in mode_lower or "inverse" in mode_lower:
+            # Physical metric distance inversion: Z = 1 / (d + eps)
+            eps = 0.05
+            z_raw = 1.0 / (depth_norm + eps)
+            z_norm = (z_raw - z_raw.min()) / max(1e-6, z_raw.max() - z_raw.min())
+            # Maintain convention: 1.0 = near, 0.0 = far
+            depth_norm = (1.0 - z_norm).astype(np.float32)
+            if gamma != 1.0:
+                depth_norm = np.power(depth_norm, gamma)
+        elif gamma != 1.0:
+            depth_norm = np.power(depth_norm, gamma)
+
+        # Clamp to [0, 1]
+        depth_norm = np.clip(depth_norm, 0.0, 1.0).astype(np.float32)
 
         # Generate colored visualization
         try:

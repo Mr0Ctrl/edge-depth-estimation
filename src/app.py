@@ -17,6 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from depth_estimator import DepthEstimator
 from bokeh_blur import apply_synthetic_bokeh, CURVE_OPTIONS
 
+DEPTH_MODES = [
+    "Linearized (Balanced Contrast)",
+    "Inverse Metric (1/Z Physical Distance)",
+    "Raw Disparity (Foundation Model Default)",
+]
+
 
 class BokehApp:
     def __init__(self, model_name: str = "depth-anything/Depth-Anything-V2-Small-hf"):
@@ -25,8 +31,13 @@ class BokehApp:
         self.cached_image: Optional[np.ndarray] = None
         self.cached_depth: Optional[np.ndarray] = None
         self.cached_depth_colored: Optional[np.ndarray] = None
+        self.current_depth_mode: str = DEPTH_MODES[0]
 
-    def process_new_image(self, image: Optional[np.ndarray]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
+    def process_new_image(
+        self,
+        image: Optional[np.ndarray],
+        depth_mode: str = DEPTH_MODES[0],
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
         """
         Runs Depth Anything inference on newly uploaded image and caches the depth map.
         """
@@ -37,11 +48,11 @@ class BokehApp:
             return None, None, 0.5
 
         self.cached_image = image
-        depth_norm, depth_colored = self.estimator.estimate_depth(image)
+        self.current_depth_mode = depth_mode
+        depth_norm, depth_colored = self.estimator.estimate_depth(image, depth_mode=depth_mode)
         self.cached_depth = depth_norm
         self.cached_depth_colored = depth_colored
 
-        # Default focus to the median depth of the scene
         default_focus = float(np.median(depth_norm))
         return depth_colored, default_focus
 
@@ -52,6 +63,7 @@ class BokehApp:
         blur_power: float,
         dof_width: float,
         curve_type: str,
+        depth_mode: str,
         highlight_focus: bool,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
@@ -60,10 +72,20 @@ class BokehApp:
         if image is None:
             return None, None
 
-        # Check if depth needs to be calculated
-        if self.cached_depth is None or self.cached_image is None or not np.array_equal(self.cached_image, image):
+        # Check if depth needs to be calculated or re-linearized
+        need_recompute = (
+            self.cached_depth is None
+            or self.cached_image is None
+            or not np.array_equal(self.cached_image, image)
+            or self.current_depth_mode != depth_mode
+        )
+
+        if need_recompute:
             self.cached_image = image
-            self.cached_depth, self.cached_depth_colored = self.estimator.estimate_depth(image)
+            self.current_depth_mode = depth_mode
+            self.cached_depth, self.cached_depth_colored = self.estimator.estimate_depth(
+                image, depth_mode=depth_mode
+            )
 
         # Apply bokeh effect
         bokeh_result, _ = apply_synthetic_bokeh(
@@ -85,6 +107,7 @@ class BokehApp:
         blur_power: float,
         dof_width: float,
         curve_type: str,
+        depth_mode: str,
         highlight_focus: bool,
     ):
         """
@@ -114,7 +137,6 @@ class BokehApp:
 
 
 def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
-    # Discover sample images if available
     samples = []
     if os.path.exists(sample_images_dir):
         for f in sorted(os.listdir(sample_images_dir)):
@@ -127,10 +149,10 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
             # 📷 EdgeDepth-Lite: Synthetic Aperture & Bokeh Prototype
             Simulate real-time physical depth of field (optical bokeh) using **Depth Anything** monocular depth estimation.
             
-            - **Click on the image** or adjust the **Focus Depth** slider to change the focal plane.
-            - Adjust **Blur Power** to increase background/foreground defocus blur strength.
-            - Select **Blur Response Curve** to control how aggressively out-of-focus areas blur.
-            - Adjust **Depth of Field (DOF)** down to `0.000` for razor-sharp shallow depth of field.
+            - **Click on the image** or adjust **Focus Depth** to change the focal plane.
+            - Adjust **Blur Power** to increase defocus blur strength.
+            - Toggle **Depth Representation** to view **Linearized Depth** (expanded background contrast) vs **Raw Disparity**.
+            - Adjust **Depth of Field (DOF)** down to `0.000` for razor-sharp focal planes.
             """
         )
 
@@ -170,7 +192,13 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
                         choices=CURVE_OPTIONS,
                         value=CURVE_OPTIONS[0],
                         label="📈 Blur Response Curve",
-                        info="Choose between aggressive pop, linear, smoothstep, or exponential",
+                        info="Controls how rapidly blur ramps up away from the focal plane",
+                    )
+                    depth_mode_dropdown = gr.Dropdown(
+                        choices=DEPTH_MODES,
+                        value=DEPTH_MODES[0],
+                        label="🗺️ Depth Map Representation",
+                        info="Linearize disparity to expand background contrast and depth perception",
                     )
                     highlight_checkbox = gr.Checkbox(
                         value=False,
@@ -197,34 +225,43 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
 
         # Dynamic events
         # 1. When image changes, compute depth map and update bokeh
-        def on_image_change(img, focus, blur, dof, curve, highlight):
+        def on_image_change(img, focus, blur, dof, curve, d_mode, highlight):
             if img is None:
                 return None, None, 0.5
-            _, default_focus = app.process_new_image(img)
+            _, default_focus = app.process_new_image(img, depth_mode=d_mode)
             active_focus = focus if focus is not None else default_focus
-            bokeh_img, depth_col = app.update_bokeh(img, active_focus, blur, dof, curve, highlight)
+            bokeh_img, depth_col = app.update_bokeh(img, active_focus, blur, dof, curve, d_mode, highlight)
             return bokeh_img, depth_col, active_focus
+
+        all_controls = [
+            input_image,
+            focus_slider,
+            blur_power_slider,
+            dof_slider,
+            curve_dropdown,
+            depth_mode_dropdown,
+            highlight_checkbox,
+        ]
+        slider_outputs = [output_bokeh, output_depth]
 
         input_image.change(
             fn=on_image_change,
-            inputs=[input_image, focus_slider, blur_power_slider, dof_slider, curve_dropdown, highlight_checkbox],
+            inputs=all_controls,
             outputs=[output_bokeh, output_depth, focus_slider],
         )
 
         # 2. Sliders & controls update bokeh instantly using cached depth
-        controls = [input_image, focus_slider, blur_power_slider, dof_slider, curve_dropdown, highlight_checkbox]
-        slider_outputs = [output_bokeh, output_depth]
-
-        focus_slider.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
-        blur_power_slider.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
-        dof_slider.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
-        curve_dropdown.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
-        highlight_checkbox.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
+        focus_slider.change(fn=app.update_bokeh, inputs=all_controls, outputs=slider_outputs)
+        blur_power_slider.change(fn=app.update_bokeh, inputs=all_controls, outputs=slider_outputs)
+        dof_slider.change(fn=app.update_bokeh, inputs=all_controls, outputs=slider_outputs)
+        curve_dropdown.change(fn=app.update_bokeh, inputs=all_controls, outputs=slider_outputs)
+        depth_mode_dropdown.change(fn=app.update_bokeh, inputs=all_controls, outputs=slider_outputs)
+        highlight_checkbox.change(fn=app.update_bokeh, inputs=all_controls, outputs=slider_outputs)
 
         # 3. Click-to-focus on input image
         input_image.select(
             fn=app.on_click_focus,
-            inputs=[input_image, blur_power_slider, dof_slider, curve_dropdown, highlight_checkbox],
+            inputs=[input_image, blur_power_slider, dof_slider, curve_dropdown, depth_mode_dropdown, highlight_checkbox],
             outputs=[focus_slider, output_bokeh, output_depth],
         )
 
