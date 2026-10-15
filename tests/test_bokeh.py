@@ -23,7 +23,7 @@ class TestBokehBlur(unittest.TestCase):
     def test_focus_mask_bounds(self):
         focus = 0.5
         dof = 0.1
-        mask = compute_focus_mask(self.depth_map, focus_depth=focus, dof_width=dof)
+        mask, in_focus = compute_focus_mask(self.depth_map, focus_depth=focus, dof_width=dof)
 
         self.assertEqual(mask.shape, (100, 100))
         self.assertGreaterEqual(mask.min(), 0.0)
@@ -41,7 +41,7 @@ class TestBokehBlur(unittest.TestCase):
         # Blur should strictly increase as distance from focus increases (no flat plateau)
         focus = 0.5
         dof = 0.05
-        mask = compute_focus_mask(self.depth_map, focus_depth=focus, dof_width=dof)
+        mask, _ = compute_focus_mask(self.depth_map, focus_depth=focus, dof_width=dof)
 
         # Check weights at depths: 0.55 (just outside DOF), 0.70 (mid distance), 0.95 (far distance)
         # Depth values correspond to row index / 100
@@ -51,6 +51,18 @@ class TestBokehBlur(unittest.TestCase):
 
         self.assertLess(w_near, w_mid)
         self.assertLess(w_mid, w_far)
+
+    def test_curve_options_and_razor_thin_dof(self):
+        exact_focus = float(self.depth_map[50, 50])
+        mask_linear, in_focus_linear = compute_focus_mask(self.depth_map, focus_depth=exact_focus, dof_width=0.001, curve_type="Linear")
+        mask_aggr, in_focus_aggr = compute_focus_mask(self.depth_map, focus_depth=exact_focus, dof_width=0.001, curve_type="Aggressive")
+
+        # Just outside focal plane (e.g. row 60), aggressive curve should be much stronger than linear
+        self.assertGreater(float(mask_aggr[60, 50]), float(mask_linear[60, 50]))
+
+        # Razor-thin in_focus should only cover exact row 50, but not row 52
+        self.assertTrue(in_focus_aggr[50, 50])
+        self.assertFalse(in_focus_aggr[52, 50])
 
     def test_zero_blur_power_preserves_image(self):
         bokeh, weight = apply_synthetic_bokeh(

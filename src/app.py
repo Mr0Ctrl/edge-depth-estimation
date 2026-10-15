@@ -15,7 +15,7 @@ import gradio as gr
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from depth_estimator import DepthEstimator
-from bokeh_blur import apply_synthetic_bokeh
+from bokeh_blur import apply_synthetic_bokeh, CURVE_OPTIONS
 
 
 class BokehApp:
@@ -51,6 +51,7 @@ class BokehApp:
         focus_depth: float,
         blur_power: float,
         dof_width: float,
+        curve_type: str,
         highlight_focus: bool,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
@@ -71,7 +72,7 @@ class BokehApp:
             focus_depth=focus_depth,
             blur_power=blur_power,
             dof_width=dof_width,
-            falloff=0.15,
+            curve_type=curve_type,
             highlight_focus=highlight_focus,
         )
 
@@ -83,6 +84,7 @@ class BokehApp:
         image: Optional[np.ndarray],
         blur_power: float,
         dof_width: float,
+        curve_type: str,
         highlight_focus: bool,
     ):
         """
@@ -104,7 +106,7 @@ class BokehApp:
             focus_depth=clicked_depth,
             blur_power=blur_power,
             dof_width=dof_width,
-            falloff=0.15,
+            curve_type=curve_type,
             highlight_focus=highlight_focus,
         )
 
@@ -127,7 +129,8 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
             
             - **Click on the image** or adjust the **Focus Depth** slider to change the focal plane.
             - Adjust **Blur Power** to increase background/foreground defocus blur strength.
-            - Adjust **Depth of Field (DOF)** to control the sharp depth band.
+            - Select **Blur Response Curve** to control how aggressively out-of-focus areas blur.
+            - Adjust **Depth of Field (DOF)** down to `0.000` for razor-sharp shallow depth of field.
             """
         )
 
@@ -143,30 +146,36 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
                         minimum=0.0,
                         maximum=1.0,
                         value=0.5,
-                        step=0.01,
+                        step=0.005,
                         label="🎯 Focus Depth (0.0 = Far, 1.0 = Near)",
                         info="Adjust focal plane position or click directly on the image",
                     )
                     blur_power_slider = gr.Slider(
                         minimum=0.0,
                         maximum=1.0,
-                        value=0.6,
+                        value=0.7,
                         step=0.02,
                         label="🔮 Blur Power (Bokeh Strength)",
                         info="Simulates wider physical lens aperture",
                     )
                     dof_slider = gr.Slider(
-                        minimum=0.01,
-                        maximum=0.3,
-                        value=0.08,
-                        step=0.01,
+                        minimum=0.000,
+                        maximum=0.15,
+                        value=0.015,
+                        step=0.001,
                         label="📏 Depth of Field (DOF) Margin",
-                        info="Thickness of the in-focus depth region",
+                        info="Thickness of the in-focus band (down to 0.000 for razor-thin)",
+                    )
+                    curve_dropdown = gr.Dropdown(
+                        choices=CURVE_OPTIONS,
+                        value=CURVE_OPTIONS[0],
+                        label="📈 Blur Response Curve",
+                        info="Choose between aggressive pop, linear, smoothstep, or exponential",
                     )
                     highlight_checkbox = gr.Checkbox(
                         value=False,
                         label="🟢 Highlight In-Focus Region (Visual Aid)",
-                        info="Overlays green tint on the active focal plane",
+                        info="Overlays strict green tint on the active focal plane only",
                     )
 
             with gr.Column(scale=1):
@@ -188,33 +197,34 @@ def create_demo(app: BokehApp, sample_images_dir: str = "assets") -> gr.Blocks:
 
         # Dynamic events
         # 1. When image changes, compute depth map and update bokeh
-        def on_image_change(img, focus, blur, dof, highlight):
+        def on_image_change(img, focus, blur, dof, curve, highlight):
             if img is None:
                 return None, None, 0.5
             _, default_focus = app.process_new_image(img)
             active_focus = focus if focus is not None else default_focus
-            bokeh_img, depth_col = app.update_bokeh(img, active_focus, blur, dof, highlight)
+            bokeh_img, depth_col = app.update_bokeh(img, active_focus, blur, dof, curve, highlight)
             return bokeh_img, depth_col, active_focus
 
         input_image.change(
             fn=on_image_change,
-            inputs=[input_image, focus_slider, blur_power_slider, dof_slider, highlight_checkbox],
+            inputs=[input_image, focus_slider, blur_power_slider, dof_slider, curve_dropdown, highlight_checkbox],
             outputs=[output_bokeh, output_depth, focus_slider],
         )
 
-        # 2. Sliders update bokeh instantly using cached depth
-        slider_inputs = [input_image, focus_slider, blur_power_slider, dof_slider, highlight_checkbox]
+        # 2. Sliders & controls update bokeh instantly using cached depth
+        controls = [input_image, focus_slider, blur_power_slider, dof_slider, curve_dropdown, highlight_checkbox]
         slider_outputs = [output_bokeh, output_depth]
 
-        focus_slider.change(fn=app.update_bokeh, inputs=slider_inputs, outputs=slider_outputs)
-        blur_power_slider.change(fn=app.update_bokeh, inputs=slider_inputs, outputs=slider_outputs)
-        dof_slider.change(fn=app.update_bokeh, inputs=slider_inputs, outputs=slider_outputs)
-        highlight_checkbox.change(fn=app.update_bokeh, inputs=slider_inputs, outputs=slider_outputs)
+        focus_slider.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
+        blur_power_slider.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
+        dof_slider.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
+        curve_dropdown.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
+        highlight_checkbox.change(fn=app.update_bokeh, inputs=controls, outputs=slider_outputs)
 
         # 3. Click-to-focus on input image
         input_image.select(
             fn=app.on_click_focus,
-            inputs=[input_image, blur_power_slider, dof_slider, highlight_checkbox],
+            inputs=[input_image, blur_power_slider, dof_slider, curve_dropdown, highlight_checkbox],
             outputs=[focus_slider, output_bokeh, output_depth],
         )
 

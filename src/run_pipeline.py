@@ -21,7 +21,8 @@ def main():
     parser.add_argument("--image", type=str, required=True, help="Path to input image")
     parser.add_argument("--focus-depth", type=float, default=0.5, help="Focal plane depth in [0.0, 1.0]")
     parser.add_argument("--blur-power", type=float, default=0.7, help="Bokeh blur intensity in [0.0, 1.0]")
-    parser.add_argument("--dof-width", type=float, default=0.08, help="Depth of field margin")
+    parser.add_argument("--dof-width", type=float, default=0.02, help="Depth of field margin")
+    parser.add_argument("--curve-type", type=str, default="Aggressive (Sharp Subject Pop)", help="Blur curve type")
     parser.add_argument("--output-dir", type=str, default="outputs", help="Output directory")
     parser.add_argument("--model", type=str, default="depth-anything/Depth-Anything-V2-Small-hf", help="Model ID")
     parser.add_argument("--highlight-focus", action="store_true", help="Highlight the focal plane in green")
@@ -47,6 +48,7 @@ def main():
         focus_depth=args.focus_depth,
         blur_power=args.blur_power,
         dof_width=args.dof_width,
+        curve_type=args.curve_type,
         highlight_focus=args.highlight_focus,
     )
 
