@@ -18,8 +18,9 @@ from depth_estimator import DepthEstimator
 from bokeh_blur import apply_synthetic_bokeh, CURVE_OPTIONS
 
 DEPTH_MODES = [
-    "Linearized (Balanced Contrast)",
-    "Inverse Metric (1/Z Physical Distance)",
+    "Log-Linearized (Balanced Contrast)",
+    "Normalized Inverse Disparity (1/Z Metric)",
+    "Power / Sqrt Linearized",
     "Raw Disparity (Foundation Model Default)",
 ]
 

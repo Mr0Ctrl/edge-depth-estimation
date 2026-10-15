@@ -99,24 +99,45 @@ class DepthEstimator:
 
         depth_norm = depth_norm.astype(np.float32)
 
-        # Apply linearization if selected
+        # Apply linearization and normalization if selected
         mode_lower = depth_mode.lower()
-        if "balanced" in mode_lower or "gamma" in mode_lower:
-            # Perceptual square-root linearization: expands the compressed background
-            depth_norm = np.power(depth_norm, 0.5 * gamma)
+        if "log" in mode_lower:
+            # Log-linearized depth: standard in CV for equalizing near vs far perception
+            eps = 0.05
+            log_z = -np.log(np.maximum(depth_norm, 0.0) + eps)
+            z_min = float(log_z.min())
+            z_max = float(log_z.max())
+            log_norm = (log_z - z_min) / max(1e-6, z_max - z_min)
+            # Invert direction: 1.0 = near, 0.0 = far
+            depth_norm = (1.0 - log_norm).astype(np.float32)
+            if gamma != 1.0:
+                depth_norm = np.power(depth_norm, gamma)
         elif "metric" in mode_lower or "inverse" in mode_lower:
             # Physical metric distance inversion: Z = 1 / (d + eps)
+            # Clip denominator to prevent sky / zero disparity from blowing up dynamic range
             eps = 0.05
-            z_raw = 1.0 / (depth_norm + eps)
-            z_norm = (z_raw - z_raw.min()) / max(1e-6, z_raw.max() - z_raw.min())
+            z_raw = 1.0 / (np.maximum(depth_norm, 0.0) + eps)
+            z_min = float(z_raw.min())
+            z_max = float(z_raw.max())
+            z_norm = (z_raw - z_min) / max(1e-6, z_max - z_min)
             # Maintain convention: 1.0 = near, 0.0 = far
             depth_norm = (1.0 - z_norm).astype(np.float32)
             if gamma != 1.0:
                 depth_norm = np.power(depth_norm, gamma)
+        elif "balanced" in mode_lower or "gamma" in mode_lower or "power" in mode_lower:
+            # Perceptual power/sqrt linearization: expands compressed background
+            depth_norm = np.power(depth_norm, 0.5 * gamma)
         elif gamma != 1.0:
             depth_norm = np.power(depth_norm, gamma)
 
-        # Clamp to [0, 1]
+        # Re-normalize strictly to [0.0, 1.0] across the entire transformed map
+        d_min = float(depth_norm.min())
+        d_max = float(depth_norm.max())
+        if d_max > d_min:
+            depth_norm = (depth_norm - d_min) / (d_max - d_min)
+        else:
+            depth_norm = np.zeros_like(depth_norm)
+
         depth_norm = np.clip(depth_norm, 0.0, 1.0).astype(np.float32)
 
         # Generate colored visualization
