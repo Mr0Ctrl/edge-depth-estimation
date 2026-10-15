@@ -99,18 +99,27 @@ class DepthEstimator:
 
         depth_norm = depth_norm.astype(np.float32)
 
-        # Square root transform: expands distant background variations, moderates near changes
+        # True linear depth inversion: z = 1/m
+        # Disparity m = k/z has 55x sensitivity distortion between near and far.
+        # Taking z = 1/m makes depth change completely uniform (1x) across all distances.
         if "raw" in depth_mode.lower():
             final_depth = depth_norm
         else:
-            # Default: take square root of raw disparity and normalize it to [0, 1]
-            sqrt_depth = np.sqrt(np.clip(depth_norm, 0.0, 1.0))
-            s_min = float(sqrt_depth.min())
-            s_max = float(sqrt_depth.max())
-            if s_max > s_min:
-                final_depth = (sqrt_depth - s_min) / (s_max - s_min)
+            z_near = 1.0
+            z_far = 8.0  # Photographic focal depth ratio
+            inv_z = (1.0 / z_far) + depth_norm * (1.0 / z_near - 1.0 / z_far)
+            z = 1.0 / np.maximum(inv_z, 1e-6)
+
+            # Normalize z strictly to [0.0, 1.0]
+            z_min = float(z.min())
+            z_max = float(z.max())
+            if z_max > z_min:
+                z_norm = (z - z_min) / (z_max - z_min)
             else:
-                final_depth = sqrt_depth
+                z_norm = np.zeros_like(z)
+
+            # Standard convention: 1.0 = Near (foreground), 0.0 = Far (background)
+            final_depth = 1.0 - z_norm
 
         depth_norm = np.clip(final_depth, 0.0, 1.0).astype(np.float32)
 

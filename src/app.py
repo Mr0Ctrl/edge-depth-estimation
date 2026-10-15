@@ -18,8 +18,8 @@ from depth_estimator import DepthEstimator
 from bokeh_blur import apply_synthetic_bokeh, CURVE_OPTIONS
 
 DEPTH_MODES = [
-    "Square Root Normalized (Linearized Distance)",
-    "Raw Disparity (Direct Model Output)",
+    "Linear Metric Depth (z = 1/m)",
+    "Raw Disparity (m = 1/z)",
 ]
 
 
