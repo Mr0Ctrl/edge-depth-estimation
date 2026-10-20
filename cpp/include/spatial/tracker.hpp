@@ -60,6 +60,8 @@ private:
     cv::CascadeClassifier m_cascade;
     bool m_hasCascade;
     TrackedTarget m_lastTarget;
+    cv::Mat m_grayBuffer;
+    cv::Mat m_smallGray;
 };
 
 } // namespace spatial
