@@ -108,7 +108,7 @@ class DepthEstimator:
             # When disparity m -> 0 (sky / horizon), 1/m -> infinity.
             # This causes a singularity where the sky blows up to infinity and crushes foreground contrast.
             # We clamp to optical infinity floor so the sky remains stable and properly dark.
-            sky_floor = 0.05
+            sky_floor = 0.025
             m_clamped = np.maximum(raw_disp, sky_floor)
 
             # Linear metric distance: z = 1 / m
