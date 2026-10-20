@@ -1,0 +1,27 @@
+# Build outputs
+build/
+bin/
+lib/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+compile_commands.json
+
+# Dependencies & caches
+.cache/
+.venv/
+outputs/
+models/*.onnx
+
+# OS
+.DS_Store
+Thumbs.db
