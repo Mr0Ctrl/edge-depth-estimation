@@ -1,67 +1,82 @@
 #pragma once
 
 #include <opencv2/opencv.hpp>
-#include <optional>
+#include <opencv2/dnn.hpp>
+#include <vector>
+#include <memory>
+#include <string>
 
 namespace spatial {
 
 /**
- * @brief Represents a 2D bounding box and focal target point.
+ * @brief Represents a 2D bounding box, focal target point, and metadata.
  */
 struct TrackedTarget {
-    cv::Rect bbox;           // Bounding box [x, y, width, height]
-    cv::Point2f center;      // Center point (u, v) for autofocus sampling
-    float confidence;        // Detection/tracking confidence in [0.0, 1.0]
-    bool isLocked;           // True if tracker is actively locked on target
+    cv::Rect bbox;                        // Bounding box [x, y, width, height]
+    cv::Point2f center;                   // Focal target point (u, v) for autofocus/bokeh
+    float confidence{0.0f};               // Detection/tracking confidence in [0.0, 1.0]
+    bool isLocked{false};                 // True if target is actively locked
 };
 
 /**
- * @brief Classical tracking system for automated camera focal target selection.
- * Uses template matching, Haar cascades, or center-weighted fallback.
+ * @brief Abstract tracking interface (Polymorphic Strategy Pattern).
  */
-class FocusTracker {
+class ITracker {
 public:
-    enum class Method {
-        CenterPoint,        // Default: Center of frame
-        TemplateMatching,   // Classical: cv::matchTemplate
-        HaarCascade         // Classical: cv::CascadeClassifier (Face/Object)
-    };
+    virtual ~ITracker() = default;
+    virtual bool init() = 0;
+    virtual TrackedTarget update(const cv::Mat& frame) = 0;
+    virtual void reset() = 0;
+    virtual void drawDebug(cv::Mat& frame, const TrackedTarget& target) const;
+};
 
-    FocusTracker();
-    ~FocusTracker();
+/**
+ * @brief Default fallback tracker focusing on the center of the frame.
+ */
+class CenterTracker : public ITracker {
+public:
+    bool init() override { return true; }
+    TrackedTarget update(const cv::Mat& frame) override;
+    void reset() override {}
+};
 
-    /**
-     * @brief Initializes tracker with a specific method.
-     * @param method Tracking algorithm.
-     * @param cascadePath Path to XML cascade if using HaarCascade (optional).
-     */
-    bool init(Method method = Method::CenterPoint, const std::string& cascadePath = "");
-
-    /**
-     * @brief Sets a custom template from a bounding box for template matching.
-     */
-    void setTemplate(const cv::Mat& frame, const cv::Rect& roi);
-
-    /**
-     * @brief Processes the current frame and returns the active focus target.
-     * @param frame BGR frame from camera.
-     * @return TrackedTarget with bounding box and center focal point.
-     */
-    TrackedTarget update(const cv::Mat& frame);
-
-    /**
-     * @brief Renders tracking visualizer (crosshairs, bounding box) onto the frame.
-     */
-    void drawDebug(cv::Mat& frame, const TrackedTarget& target) const;
+/**
+ * @brief Deep Learning Face Detector based on OpenCV's native SSD-ResNet10 architecture.
+ * Rock-solid, fully compatible with OpenCV 4.x, and fast on CPU (~50-80 FPS).
+ */
+class DnnFaceTracker : public ITracker {
+public:
+    DnnFaceTracker(std::string configPath, std::string modelPath, float confidenceThreshold = 0.6f);
+    bool init() override;
+    TrackedTarget update(const cv::Mat& frame) override;
+    void reset() override;
 
 private:
-    Method m_method;
-    cv::Mat m_template;
-    cv::CascadeClassifier m_cascade;
-    bool m_hasCascade;
+    std::string m_configPath;
+    std::string m_modelPath;
+    float m_confidenceThreshold;
+    cv::dnn::Net m_net;
+    bool m_isLoaded{false};
     TrackedTarget m_lastTarget;
+};
+
+/**
+ * @brief Classical Viola-Jones Haar Cascade face tracker (Secondary fallback).
+ */
+class HaarFaceTracker : public ITracker {
+public:
+    explicit HaarFaceTracker(std::string cascadePath);
+    bool init() override;
+    TrackedTarget update(const cv::Mat& frame) override;
+    void reset() override;
+
+private:
+    std::string m_cascadePath;
+    cv::CascadeClassifier m_cascade;
+    bool m_isLoaded{false};
     cv::Mat m_grayBuffer;
     cv::Mat m_smallGray;
+    TrackedTarget m_lastTarget;
 };
 
 } // namespace spatial
