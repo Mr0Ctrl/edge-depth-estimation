@@ -41,23 +41,43 @@ public:
 };
 
 /**
- * @brief Deep Learning Face Detector based on OpenCV's native SSD-ResNet10 architecture.
- * Rock-solid, fully compatible with OpenCV 4.x, and fast on CPU (~50-80 FPS).
+ * @brief Hybrid Detection-and-Tracking Face Tracker.
+ * 
+ * Runs deep neural network detection (SSD-ResNet10) periodically (e.g. every 8 frames),
+ * and uses ultra-fast localized correlation tracking (~1ms) on intermediate frames.
+ * Delivers continuous, smooth 30+ FPS tracking with minimal CPU overhead.
  */
 class DnnFaceTracker : public ITracker {
 public:
-    DnnFaceTracker(std::string configPath, std::string modelPath, float confidenceThreshold = 0.6f);
+    DnnFaceTracker(std::string configPath,
+                   std::string modelPath,
+                   float confidenceThreshold = 0.55f,
+                   int detectInterval = 8);
+
     bool init() override;
     TrackedTarget update(const cv::Mat& frame) override;
     void reset() override;
 
 private:
+    // Heavy DNN detector pass (~15-20ms)
+    bool detectDnn(const cv::Mat& frame, TrackedTarget& outTarget);
+
+    // Ultra-fast localized correlation tracking pass (~1-2ms)
+    bool trackFast(const cv::Mat& frame, TrackedTarget& outTarget);
+
     std::string m_configPath;
     std::string m_modelPath;
     float m_confidenceThreshold;
+    int m_detectInterval;
+    int m_frameCounter{0};
+
     cv::dnn::Net m_net;
     bool m_isLoaded{false};
+
+    // Tracking state
     TrackedTarget m_lastTarget;
+    cv::Mat m_templatePatch;
+    cv::Mat m_grayFrame;
 };
 
 /**

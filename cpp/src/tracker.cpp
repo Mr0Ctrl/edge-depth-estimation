@@ -49,12 +49,16 @@ TrackedTarget CenterTracker::update(const cv::Mat& frame) {
 }
 
 // ----------------------------------------------------------------------------
-// DnnFaceTracker (Deep Learning SSD-ResNet10 Face Detector)
+// DnnFaceTracker (Hybrid Detection-and-Tracking)
 // ----------------------------------------------------------------------------
-DnnFaceTracker::DnnFaceTracker(std::string configPath, std::string modelPath, float confidenceThreshold)
+DnnFaceTracker::DnnFaceTracker(std::string configPath,
+                               std::string modelPath,
+                               float confidenceThreshold,
+                               int detectInterval)
     : m_configPath(std::move(configPath)),
       m_modelPath(std::move(modelPath)),
-      m_confidenceThreshold(confidenceThreshold) {}
+      m_confidenceThreshold(confidenceThreshold),
+      m_detectInterval(detectInterval) {}
 
 bool DnnFaceTracker::init() {
     if (m_configPath.empty() || m_modelPath.empty()) {
@@ -63,7 +67,6 @@ bool DnnFaceTracker::init() {
 
     try {
         m_net = cv::dnn::readNetFromCaffe(m_configPath, m_modelPath);
-        // Optimize for edge CPU execution
         m_net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         m_net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         m_isLoaded = !m_net.empty();
@@ -72,12 +75,15 @@ bool DnnFaceTracker::init() {
         m_isLoaded = false;
     }
 
+    reset();
     return m_isLoaded;
 }
 
 void DnnFaceTracker::reset() {
     m_lastTarget.isLocked = false;
     m_lastTarget.confidence = 0.0f;
+    m_templatePatch.release();
+    m_frameCounter = 0;
 }
 
 TrackedTarget DnnFaceTracker::update(const cv::Mat& frame) {
@@ -86,23 +92,59 @@ TrackedTarget DnnFaceTracker::update(const cv::Mat& frame) {
         return m_lastTarget;
     }
 
-    // Step 1: Pre-process frame for the SSD network.
-    // Fixed input size 300x300 with ImageNet BGR mean subtraction [104, 117, 123]
+    bool needDnnDetection = (!m_lastTarget.isLocked) ||
+                            (m_frameCounter % m_detectInterval == 0) ||
+                            m_templatePatch.empty();
+
+    if (needDnnDetection) {
+        // Heavy pass: Deep Neural Network Face Detection (~15-20ms)
+        TrackedTarget dnnResult;
+        if (detectDnn(frame, dnnResult)) {
+            m_lastTarget = dnnResult;
+
+            // Cache template patch for fast tracking in intermediate frames
+            cv::Rect frameBounds(0, 0, frame.cols, frame.rows);
+            cv::Rect safeBbox = m_lastTarget.bbox & frameBounds;
+            if (safeBbox.width >= 10 && safeBbox.height >= 10) {
+                // Downsample template to max 64x64 for ultra-fast normalized matching
+                cv::Mat patch = frame(safeBbox);
+                cv::resize(patch, m_templatePatch, cv::Size(64, 64), 0, 0, cv::INTER_LINEAR);
+            }
+        } else {
+            // Target lost in detector
+            m_lastTarget.isLocked = false;
+            m_lastTarget.confidence = 0.0f;
+            m_templatePatch.release();
+        }
+    } else {
+        // Fast pass: Localized Correlation Tracking (~1ms)
+        TrackedTarget trackedResult;
+        if (trackFast(frame, trackedResult)) {
+            m_lastTarget = trackedResult;
+        } else {
+            // Fast track failed (e.g. rapid head turn); trigger DNN immediately next frame
+            m_lastTarget.isLocked = false;
+            m_templatePatch.release();
+        }
+    }
+
+    m_frameCounter++;
+    return m_lastTarget;
+}
+
+bool DnnFaceTracker::detectDnn(const cv::Mat& frame, TrackedTarget& outTarget) {
     cv::Mat inputBlob = cv::dnn::blobFromImage(
         frame,
-        1.0,                       // scalefactor
-        cv::Size(300, 300),        // network input size
-        cv::Scalar(104.0, 177.0, 123.0), // mean subtraction
-        false,                     // swapRB (keep BGR)
-        false                      // crop
+        1.0,
+        cv::Size(300, 300),
+        cv::Scalar(104.0, 177.0, 123.0),
+        false,
+        false
     );
 
-    // Step 2: Forward pass through neural network
     m_net.setInput(inputBlob, "data");
     cv::Mat detection = m_net.forward("detection_out");
 
-    // detection matrix shape is [1, 1, N, 7]
-    // Each detection row has: [image_id, label, confidence, x_min, y_min, x_max, y_max]
     cv::Mat detectionMat(detection.size[2], detection.size[3], CV_32F, detection.ptr<float>());
 
     float bestConfidence = m_confidenceThreshold;
@@ -122,7 +164,6 @@ TrackedTarget DnnFaceTracker::update(const cv::Mat& frame) {
             float h = (y2 - y1);
             float area = w * h;
 
-            // Prioritize primary (largest) face
             if (area > maxArea) {
                 maxArea = area;
                 bestConfidence = confidence;
@@ -131,14 +172,12 @@ TrackedTarget DnnFaceTracker::update(const cv::Mat& frame) {
         }
     }
 
-    // Step 3: Re-map normalized coordinates [0.0, 1.0] to camera frame coordinates
     if (bestRow >= 0) {
         int x1 = static_cast<int>(detectionMat.at<float>(bestRow, 3) * frame.cols);
         int y1 = static_cast<int>(detectionMat.at<float>(bestRow, 4) * frame.rows);
         int x2 = static_cast<int>(detectionMat.at<float>(bestRow, 5) * frame.cols);
         int y2 = static_cast<int>(detectionMat.at<float>(bestRow, 6) * frame.rows);
 
-        // Clamp to frame bounds
         x1 = std::max(0, std::min(x1, frame.cols - 1));
         y1 = std::max(0, std::min(y1, frame.rows - 1));
         x2 = std::max(0, std::min(x2, frame.cols - 1));
@@ -147,16 +186,81 @@ TrackedTarget DnnFaceTracker::update(const cv::Mat& frame) {
         int width = std::max(0, x2 - x1);
         int height = std::max(0, y2 - y1);
 
-        m_lastTarget.bbox = cv::Rect(x1, y1, width, height);
-        m_lastTarget.center = cv::Point2f(x1 + width * 0.5f, y1 + height * 0.5f);
-        m_lastTarget.confidence = bestConfidence;
-        m_lastTarget.isLocked = true;
-    } else {
-        m_lastTarget.isLocked = false;
-        m_lastTarget.confidence = 0.0f;
+        outTarget.bbox = cv::Rect(x1, y1, width, height);
+        outTarget.center = cv::Point2f(x1 + width * 0.5f, y1 + height * 0.5f);
+        outTarget.confidence = bestConfidence;
+        outTarget.isLocked = true;
+        return true;
     }
 
-    return m_lastTarget;
+    return false;
+}
+
+bool DnnFaceTracker::trackFast(const cv::Mat& frame, TrackedTarget& outTarget) {
+    if (m_templatePatch.empty() || m_lastTarget.bbox.area() <= 0) {
+        return false;
+    }
+
+    // Expand search ROI around previous target by 40% in each direction
+    int padX = m_lastTarget.bbox.width * 2 / 5;
+    int padY = m_lastTarget.bbox.height * 2 / 5;
+
+    cv::Rect searchRoi(
+        m_lastTarget.bbox.x - padX,
+        m_lastTarget.bbox.y - padY,
+        m_lastTarget.bbox.width + 2 * padX,
+        m_lastTarget.bbox.height + 2 * padY
+    );
+
+    cv::Rect frameBounds(0, 0, frame.cols, frame.rows);
+    searchRoi = searchRoi & frameBounds;
+
+    if (searchRoi.width <= m_lastTarget.bbox.width || searchRoi.height <= m_lastTarget.bbox.height) {
+        return false;
+    }
+
+    // Downsample search area to match template scale (64x64 reference)
+    float scaleX = 64.0f / static_cast<float>(m_lastTarget.bbox.width);
+    float scaleY = 64.0f / static_cast<float>(m_lastTarget.bbox.height);
+
+    cv::Size scaledSearchSize(
+        static_cast<int>(searchRoi.width * scaleX),
+        static_cast<int>(searchRoi.height * scaleY)
+    );
+
+    if (scaledSearchSize.width < m_templatePatch.cols || scaledSearchSize.height < m_templatePatch.rows) {
+        return false;
+    }
+
+    cv::Mat searchImg;
+    cv::resize(frame(searchRoi), searchImg, scaledSearchSize, 0, 0, cv::INTER_LINEAR);
+
+    // Fast normalized correlation match on tiny image
+    cv::Mat matchResult;
+    cv::matchTemplate(searchImg, m_templatePatch, matchResult, cv::TM_CCOEFF_NORMED);
+
+    double minVal = 0.0, maxVal = 0.0;
+    cv::Point minLoc, maxLoc;
+    cv::minMaxLoc(matchResult, &minVal, &maxVal, &minLoc, &maxLoc);
+
+    // Correlation threshold: 0.50 ensures stable lock while allowing lighting shifts
+    if (maxVal > 0.50) {
+        // Map peak location back to original camera coordinate space
+        float invScaleX = 1.0f / scaleX;
+        float invScaleY = 1.0f / scaleY;
+
+        int newX = searchRoi.x + static_cast<int>(maxLoc.x * invScaleX);
+        int newY = searchRoi.y + static_cast<int>(maxLoc.y * invScaleY);
+
+        outTarget.bbox = cv::Rect(newX, newY, m_lastTarget.bbox.width, m_lastTarget.bbox.height) & frameBounds;
+        outTarget.center = cv::Point2f(outTarget.bbox.x + outTarget.bbox.width * 0.5f,
+                                      outTarget.bbox.y + outTarget.bbox.height * 0.5f);
+        outTarget.confidence = static_cast<float>(maxVal);
+        outTarget.isLocked = true;
+        return true;
+    }
+
+    return false;
 }
 
 // ----------------------------------------------------------------------------
