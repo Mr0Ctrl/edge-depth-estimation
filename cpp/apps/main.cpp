@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    // 1. Hardware Initialization (Threaded Camera)
+    // 1. Hardware Initialization (Threaded Camera with Fresh-Frame Sync)
     spatial::Camera cam;
     if (!cam.open(0, 1280, 720))
     {
@@ -40,16 +40,17 @@ int main(int argc, char *argv[])
         std::cout << "[INFO] Successfully initialized Deep Neural Network tracker.\n";
     }
 
-    // 3. Diagnostic Profiler
     spatial::Profiler profiler;
     cv::Mat frame;
 
     std::cout << "[INFO] Spatial Engine running. Press 'q' or 'ESC' to exit.\n";
 
-    // 4. Main Event Loop
+    double lastGuiMs = 0.0;
+
+    // 3. Main Event Loop
     for (;;)
     {
-        // A. Instant Frame Acquisition (from background thread buffer)
+        // A. True Hardware Sync: Blocks until the physical sensor delivers a genuinely NEW frame
         auto tStartCam = std::chrono::steady_clock::now();
         if (!cam.read(frame) || frame.empty())
         {
@@ -67,8 +68,8 @@ int main(int argc, char *argv[])
         // C. Visual Overlays
         tracker->drawDebug(frame, target);
 
-        // D. Profiling Tick & Diagnostics HUD
-        profiler.tick(camMs, trackMs, 0.0);
+        // D. Single Profiling Tick per True Frame
+        profiler.tick(camMs, trackMs, lastGuiMs);
         profiler.drawOverlay(frame);
 
         // E. Screen Display & User Input
@@ -76,10 +77,7 @@ int main(int argc, char *argv[])
         cv::imshow("Spatial Vision Engine", frame);
         int key = cv::waitKey(1);
         auto tEndGui = std::chrono::steady_clock::now();
-        double guiMs = std::chrono::duration<double, std::milli>(tEndGui - tStartGui).count();
-
-        // Update GUI latency slice in profiler
-        profiler.tick(0.0, 0.0, guiMs);
+        lastGuiMs = std::chrono::duration<double, std::milli>(tEndGui - tStartGui).count();
 
         if (key == 'q' || key == 'Q' || key == 27)
         {

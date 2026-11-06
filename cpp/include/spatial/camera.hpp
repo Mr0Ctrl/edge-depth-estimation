@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <chrono>
 
@@ -12,25 +13,19 @@ namespace spatial {
 /**
  * @brief Threaded, asynchronous camera hardware capture engine.
  * 
- * Uses a dedicated background thread to ingest hardware frames continuously
- * via Linux V4L2/MJPG, decoupling camera sensor exposure time from downstream
- * processing pipelines (AI tracking, depth estimation, UI rendering).
+ * Uses a producer-consumer model with std::condition_variable to synchronize
+ * the consumer to the camera's true hardware cadence without busy-spinning.
  */
 class Camera {
 public:
     Camera();
     ~Camera();
 
-    // Prevent accidental copying (threads and hardware streams are non-copyable)
     Camera(const Camera&) = delete;
     Camera& operator=(const Camera&) = delete;
 
     /**
-     * @brief Opens camera hardware and starts the background capture thread.
-     * @param deviceIndex Index of webcam (/dev/videoX).
-     * @param width Desired stream width.
-     * @param height Desired stream height.
-     * @return true if hardware opened and capture thread started.
+     * @brief Opens camera hardware and starts the capture worker thread.
      */
     bool open(int deviceIndex = 0, int width = 1280, int height = 720);
 
@@ -40,11 +35,12 @@ public:
     bool openFile(const std::string& filepath);
 
     /**
-     * @brief Retrieves the latest available frame from the background buffer (non-blocking).
+     * @brief Waits for the next FRESH hardware frame and copies it (true hardware pacing).
      * @param[out] frame Destination OpenCV Mat.
-     * @return true if a valid frame was copied, false if stream ended or stopped.
+     * @param timeoutMs Maximum wait time before returning false.
+     * @return true if a fresh frame arrived, false if timeout or stream stopped.
      */
-    bool read(cv::Mat& frame);
+    bool read(cv::Mat& frame, int timeoutMs = 100);
 
     /**
      * @brief Checks if camera stream and capture thread are active.
@@ -69,6 +65,7 @@ private:
     // Threading & Synchronization
     std::thread m_thread;
     std::mutex m_mutex;
+    std::condition_variable m_cv;
     std::atomic<bool> m_running{false};
     cv::Mat m_latestFrame;
     bool m_hasNewFrame{false};
