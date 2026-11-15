@@ -1,16 +1,18 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
-#include <chrono>
 #include <memory>
 
 #include "spatial/camera.hpp"
 #include "spatial/tracker.hpp"
 #include "spatial/profiler.hpp"
+#include "spatial/logger.hpp"
 
 int main(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
+
+    spatial::Logger::instance().setLevel(spatial::LogLevel::Debug);
 
     // 1. Hardware Initialization (Threaded Camera with Fresh-Frame Sync)
     spatial::Camera cam;
@@ -42,47 +44,48 @@ int main(int argc, char *argv[])
 
     spatial::Profiler profiler;
     cv::Mat frame;
+    spatial::TrackedTarget target;
 
     std::cout << "[INFO] Spatial Engine running. Press 'q' or 'ESC' to exit.\n";
-
-    double lastGuiMs = 0.0;
 
     // 3. Main Event Loop
     for (;;)
     {
         // A. True Hardware Sync: Blocks until the physical sensor delivers a genuinely NEW frame
-        auto tStartCam = std::chrono::steady_clock::now();
-        if (!cam.read(frame) || frame.empty())
         {
-            continue;
+            spatial::ScopedTimer timmer(profiler, "CameraMs");
+            if (!cam.read(frame) || frame.empty())
+            {
+                continue;
+            }
         }
-        auto tEndCam = std::chrono::steady_clock::now();
-        double camMs = std::chrono::duration<double, std::milli>(tEndCam - tStartCam).count();
 
         // B. Target Tracking & Focus Selection
-        auto tStartTrack = std::chrono::steady_clock::now();
-        spatial::TrackedTarget target = tracker->update(frame);
-        auto tEndTrack = std::chrono::steady_clock::now();
-        double trackMs = std::chrono::duration<double, std::milli>(tEndTrack - tStartTrack).count();
+        {
+            spatial::ScopedTimer timmer(profiler, "TargetMs");
+            target = tracker->update(frame);
+        }
 
         // C. Visual Overlays
+
         tracker->drawDebug(frame, target);
 
-        // D. Single Profiling Tick per True Frame
-        profiler.tick(camMs, trackMs, lastGuiMs);
-        profiler.drawOverlay(frame);
+        { // D. Screen Display & User Input
+            spatial::ScopedTimer timmer(profiler, "RenderMs");
 
-        // E. Screen Display & User Input
-        auto tStartGui = std::chrono::steady_clock::now();
-        cv::imshow("Spatial Vision Engine", frame);
-        int key = cv::waitKey(1);
-        auto tEndGui = std::chrono::steady_clock::now();
-        lastGuiMs = std::chrono::duration<double, std::milli>(tEndGui - tStartGui).count();
+            cv::imshow("Spatial Vision Engine", frame);
+            int key = cv::waitKey(1);
 
-        if (key == 'q' || key == 'Q' || key == 27)
-        {
-            break;
+            if (key == 'q' || key == 'Q' || key == 27)
+            {
+                break;
+            }
         }
+
+        // E. Single Profiling Tick per True Frame
+        profiler.tickFrame();
+        auto summary = profiler.summary();
+        SPATIAL_LOG_INFO(summary);
     }
 
     cam.close();
