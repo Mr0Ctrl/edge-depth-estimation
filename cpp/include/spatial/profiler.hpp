@@ -1,42 +1,63 @@
 #pragma once
-
-#include <opencv2/opencv.hpp>
 #include <chrono>
 #include <string>
+#include <unordered_map>
 
-namespace spatial {
-
-/**
- * @brief Performance profiler and diagnostic HUD overlay.
- * 
- * Tracks rolling frames-per-second (FPS) and phase latencies (Camera, AI, GUI)
- * without polluting core business logic.
- */
-class Profiler {
-public:
-    Profiler();
+namespace spatial
+{
 
     /**
-     * @brief Records a tick with individual phase durations in milliseconds.
+     * @brief Performance profiler and diagnostic HUD overlay.
+     *
+     * Tracks rolling frames-per-second (FPS) and phase latencies (Camera, AI, GUI)
+     * without polluting core business logic.
      */
-    void tick(double camMs, double aiMs, double guiMs);
+    class Profiler
+    {
+    public:
+        Profiler();
+        ~Profiler() = default;
 
-    /**
-     * @brief Renders the diagnostic HUD onto the frame.
-     */
-    void drawOverlay(cv::Mat& frame) const;
+        void recordStage(const std::string &name, double ms);
 
-    double getFps() const { return m_fps; }
-    double getCamMs() const { return m_avgCamMs; }
-    double getAiMs() const { return m_avgAiMs; }
-    double getGuiMs() const { return m_avgGuiMs; }
+        void tickFrame();
 
-private:
-    std::chrono::steady_clock::time_point m_lastTickTime;
-    double m_fps{0.0};
-    double m_avgCamMs{0.0};
-    double m_avgAiMs{0.0};
-    double m_avgGuiMs{0.0};
-};
+        std::string summary() const;
+
+        double getFps() const { return m_fps; }
+        const std::unordered_map<std::string, double> getStageMs() const { return m_stageMs; }
+
+    private:
+        std::chrono::steady_clock::time_point m_lastTickTime;
+        std::unordered_map<std::string, double> m_stageMs;
+
+        double m_fps{0.0};
+    };
+
+    class ScopedTimer
+    {
+    private:
+        Profiler &m_profiler;
+        std::string m_name;
+        std::chrono::steady_clock::time_point m_start;
+
+        ScopedTimer(const ScopedTimer &) = delete;
+        ScopedTimer &operator=(const ScopedTimer &) = delete;
+
+    public:
+        // Doğru Initializer List: Değişkenler parantez içinde eşleştirilir
+        ScopedTimer(Profiler &profiller, std::string name)
+            : m_profiler(profiller), m_name(std::move(name)), m_start(std::chrono::steady_clock::now())
+        {
+            // Gövde içi boş kalabilir çünkü tüm atamalar ve zaman başlatma yukarıda bitti
+        }
+
+        ~ScopedTimer()
+        {
+            auto now = std::chrono::steady_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(now - m_start).count();
+            m_profiler.recordStage(m_name, ms);
+        }
+    };
 
 } // namespace spatial
