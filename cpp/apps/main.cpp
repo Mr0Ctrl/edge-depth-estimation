@@ -6,6 +6,7 @@
 #include "spatial/tracker.hpp"
 #include "spatial/profiler.hpp"
 #include "spatial/logger.hpp"
+#include "spatial/depth_engine.hpp"
 
 int main(int argc, char *argv[])
 {
@@ -43,8 +44,14 @@ int main(int argc, char *argv[])
     }
 
     spatial::Profiler profiler;
-    cv::Mat frame;
     spatial::TrackedTarget target;
+
+    spatial::DepthEngine depthEngine;
+    depthEngine.loadModel("cpp/data/model-small.onnx", true);
+    cv::Mat depthMap;
+    cv::Mat depthVis;
+    cv::Mat normDepth;
+    cv::Mat frame;
 
     std::cout << "[INFO] Spatial Engine running. Press 'q' or 'ESC' to exit.\n";
 
@@ -66,14 +73,26 @@ int main(int argc, char *argv[])
             target = tracker->update(frame);
         }
 
+        bool hasDepth = false;
+        {
+            spatial::ScopedTimer t(profiler, "DepthMs");
+            hasDepth = depthEngine.estimate(frame, depthMap);
+        }
+
+        if (hasDepth && !depthMap.empty())
+        {
+            cv::normalize(depthMap, normDepth, 0.0, 255.0, cv::NORM_MINMAX, CV_8U);
+            cv::applyColorMap(normDepth, depthVis, cv::COLORMAP_INFERNO);
+        }
+
         // C. Visual Overlays
 
-        tracker->drawDebug(frame, target);
+        tracker->drawDebug(depthVis, target);
 
         { // D. Screen Display & User Input
             spatial::ScopedTimer timmer(profiler, "RenderMs");
 
-            cv::imshow("Spatial Vision Engine", frame);
+            cv::imshow("Spatial Vision Engine", depthVis);
             int key = cv::waitKey(1);
 
             if (key == 'q' || key == 'Q' || key == 27)
@@ -85,7 +104,7 @@ int main(int argc, char *argv[])
         // E. Single Profiling Tick per True Frame
         profiler.tickFrame();
         auto summary = profiler.summary();
-        SPATIAL_LOG_INFO(summary);
+        SPATIAL_LOG_DEBUG(summary);
     }
 
     cam.close();
