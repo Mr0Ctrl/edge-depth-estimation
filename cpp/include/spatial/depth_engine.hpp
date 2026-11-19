@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <memory>
+#include <opencv2/core.hpp>
 
 namespace spatial
 {
@@ -18,6 +19,8 @@ namespace spatial
         ~DepthEngine();
 
         bool loadModel(const std::string &modelPath, bool useGPU);
+
+        bool estimate(const cv::Mat &frame, cv::Mat &depthMap, cv::Mat *coloredDepth = nullptr);
     };
 
 } // namespace spatial
